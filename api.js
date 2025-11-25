@@ -17,19 +17,22 @@ require('dotenv').config();
 const serviceAccount = {
     type: 'service_account',
     project_id: process.env.FIREBASE_PROJECT_ID,
-    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID || 'YOUR_PRIVATE_KEY_ID',
-    private_key: process.env.FIREBASE_PRIVATE_KEY,
+    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
     client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    client_id: process.env.FIREBASE_CLIENT_ID || 'YOUR_CLIENT_ID',
-    auth_uri: process.env.FIREBASE_AUTH_URI || 'https://accounts.google.com/o/oauth2/auth',
-    token_uri: process.env.FIREBASE_TOKEN_URI || 'https://oauth2.googleapis.com/token',
-    auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_X509_CERT_URL || 'https://www.googleapis.com/oauth2/v1/certs',
-    client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL || 'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40tutorial-8b436.iam.gserviceaccount.com',
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+    client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL,
 };
 
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-});
+// Initialize Firebase only once
+if (!admin.apps.length) {
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+    });
+}
 
 const db = admin.firestore();
 
@@ -42,27 +45,15 @@ const REFERRAL_REWARD = parseInt(process.env.REFERRAL_REWARD) || 30;
 const MIN_REFERRALS_FOR_WITHDRAW = parseInt(process.env.MIN_REFERRALS_FOR_WITHDRAW) || 4;
 const BOT_USERNAME = process.env.BOT_USERNAME || 'JU1confessionbot';
 
+// Validate required environment variables
 if (!BOT_TOKEN) {
-    console.error('❌ BOT_TOKEN environment variable is required');
-    process.exit(1);
+    throw new Error('❌ BOT_TOKEN environment variable is required');
 }
 
-// Create bot instance
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
-
-// ========== CONSTANTS ========== //
-const STUDENT_TYPES = ['Social Science', 'Natural Science'];
-const PAYMENT_METHODS = ['TeleBirr', 'CBE Birr'];
-const ADMIN_LEVELS = {
-    SUPER_ADMIN: 'super_admin',
-    MODERATOR: 'moderator',
-    SUPPORT: 'support',
-    VIEWER: 'viewer'
-};
+// Create bot instance (webhook mode for Vercel)
+const bot = new TelegramBot(BOT_TOKEN);
 
 // ========== DATABASE FUNCTIONS ========== //
-
-// Get user from Firebase
 const getUser = async (userId) => {
     try {
         const userDoc = await db.collection('users').doc(userId.toString()).get();
@@ -73,7 +64,6 @@ const getUser = async (userId) => {
     }
 };
 
-// Create/update user in Firebase
 const setUser = async (userId, userData) => {
     try {
         await db.collection('users').doc(userId.toString()).set(userData, { merge: true });
@@ -82,7 +72,6 @@ const setUser = async (userId, userData) => {
     }
 };
 
-// Get all users
 const getAllUsers = async () => {
     try {
         const snapshot = await db.collection('users').get();
@@ -97,7 +86,6 @@ const getAllUsers = async () => {
     }
 };
 
-// Get pending payments
 const getPendingPayments = async () => {
     try {
         const snapshot = await db.collection('payments').where('status', '==', 'pending').get();
@@ -112,7 +100,6 @@ const getPendingPayments = async () => {
     }
 };
 
-// Get verified users
 const getVerifiedUsers = async () => {
     try {
         const snapshot = await db.collection('users').where('isVerified', '==', true).get();
@@ -127,16 +114,19 @@ const getVerifiedUsers = async () => {
     }
 };
 
-// Add payment to Firebase
 const addPayment = async (paymentData) => {
     try {
-        await db.collection('payments').add(paymentData);
+        const docRef = await db.collection('payments').add({
+            ...paymentData,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return docRef.id;
     } catch (error) {
         console.error('Error adding payment:', error);
+        return null;
     }
 };
 
-// Get user referrals
 const getUserReferrals = async (referrerId) => {
     try {
         const snapshot = await db.collection('users').where('referrerId', '==', referrerId.toString()).get();
@@ -151,7 +141,6 @@ const getUserReferrals = async (referrerId) => {
     }
 };
 
-// Get top referrers
 const getTopReferrers = async (limit = 10) => {
     try {
         const snapshot = await db.collection('users').orderBy('referralCount', 'desc').limit(limit).get();
@@ -166,31 +155,19 @@ const getTopReferrers = async (limit = 10) => {
     }
 };
 
-// Get payment by user ID
-const getPaymentByUserId = async (userId) => {
+const addWithdrawalRequest = async (withdrawalData) => {
     try {
-        const snapshot = await db.collection('payments').where('userId', '==', userId).orderBy('timestamp', 'desc').limit(1).get();
-        const payments = [];
-        snapshot.forEach(doc => {
-            payments.push({ id: doc.id, ...doc.data() });
+        const docRef = await db.collection('withdrawals').add({
+            ...withdrawalData,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
         });
-        return payments[0] || null;
+        return docRef.id;
     } catch (error) {
-        console.error('Error getting payment:', error);
+        console.error('Error adding withdrawal request:', error);
         return null;
     }
 };
 
-// Add withdrawal request
-const addWithdrawalRequest = async (withdrawalData) => {
-    try {
-        await db.collection('withdrawals').add(withdrawalData);
-    } catch (error) {
-        console.error('Error adding withdrawal request:', error);
-    }
-};
-
-// Get pending withdrawals
 const getPendingWithdrawals = async () => {
     try {
         const snapshot = await db.collection('withdrawals').where('status', '==', 'pending').get();
@@ -205,7 +182,7 @@ const getPendingWithdrawals = async () => {
     }
 };
 
-// ========== MAIN MENU ========== //
+// ========== BOT HANDLERS ========== //
 const showMainMenu = async (chatId) => {
     const options = {
         reply_markup: {
@@ -229,7 +206,6 @@ const showMainMenu = async (chatId) => {
     );
 };
 
-// ========== CONSTANT MENU ========== //
 const showConstantMenu = async (chatId) => {
     const options = {
         reply_markup: {
@@ -249,7 +225,6 @@ const showConstantMenu = async (chatId) => {
     );
 };
 
-// ========== START COMMAND ========== //
 const handleStart = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -265,7 +240,6 @@ const handleStart = async (msg) => {
             if (referrerId !== userId) {
                 const referrer = await getUser(referrerId);
                 if (referrer) {
-                    // Add referral and reward
                     referrer.referralCount = (referrer.referralCount || 0) + 1;
                     referrer.rewards = (referrer.rewards || 0) + REFERRAL_REWARD;
                     referrer.totalRewards = (referrer.totalRewards || 0) + REFERRAL_REWARD;
@@ -314,7 +288,6 @@ const handleStart = async (msg) => {
     await showMainMenu(chatId);
 };
 
-// ========== REGISTER FOR TUTORIAL ========== //
 const handleRegisterTutorial = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -335,12 +308,10 @@ const handleRegisterTutorial = async (msg) => {
         return;
     }
 
-    // Update user state for registration
     user.registrationStep = 'waiting_student_type';
     user.paymentStatus = 'in_progress';
     await setUser(userId, user);
 
-    // Show student type options
     const options = {
         reply_markup: {
             keyboard: [
@@ -358,7 +329,6 @@ const handleRegisterTutorial = async (msg) => {
     );
 };
 
-// ========== HANDLE STUDENT TYPE SELECTION ========== //
 const handleStudentTypeSelection = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -392,7 +362,6 @@ const handleStudentTypeSelection = async (msg) => {
     }
 };
 
-// ========== HANDLE NAME INPUT ========== //
 const handleNameInput = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -412,7 +381,6 @@ const handleNameInput = async (msg) => {
     }
 };
 
-// ========== HANDLE PHONE INPUT ========== //
 const handlePhoneInput = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -451,7 +419,6 @@ const handlePhoneInput = async (msg) => {
     }
 };
 
-// ========== HANDLE PAYMENT METHOD SELECTION ========== //
 const handlePaymentMethodSelection = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -486,7 +453,6 @@ const handlePaymentMethodSelection = async (msg) => {
     }
 };
 
-// ========== HANDLE PAYMENT SCREENSHOT ========== //
 const handlePaymentScreenshot = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -502,16 +468,13 @@ const handlePaymentScreenshot = async (msg) => {
         }
 
         if (file_id) {
-            // Store payment information
             await addPayment({
                 userId: userId,
                 file_id: file_id,
                 paymentMethod: user.paymentMethod,
-                timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 status: 'pending'
             });
 
-            // Update user status
             user.paymentStatus = 'pending';
             user.registrationStep = 'completed';
             await setUser(userId, user);
@@ -525,10 +488,7 @@ const handlePaymentScreenshot = async (msg) => {
                 { parse_mode: 'Markdown' }
             );
 
-            // Notify admins immediately
             await notifyAdminsNewPayment(user, file_id);
-
-            // Show main menu
             await showMainMenu(chatId);
         } else {
             await bot.sendMessage(chatId,
@@ -540,7 +500,6 @@ const handlePaymentScreenshot = async (msg) => {
     }
 };
 
-// ========== NOTIFY ADMINS ========== //
 const notifyAdminsNewPayment = async (user, file_id) => {
     const notificationMessage = 
         `🔔 *NEW PAYMENT RECEIVED*\n\n` +
@@ -560,11 +519,11 @@ const notifyAdminsNewPayment = async (user, file_id) => {
         reply_markup: {
             inline_keyboard: [
                 [
-                    { text: '✅ Approve', callback_ `admin_approve_${user.telegramId}` },
-                    { text: '❌ Reject', callback_ `admin_reject_${user.telegramId}` }
+                    { text: '✅ Approve', callback_data: `admin_approve_${user.telegramId}` },
+                    { text: '❌ Reject', callback_data: `admin_reject_${user.telegramId}` }
                 ],
                 [
-                    { text: '🔍 View Details', callback_ `admin_details_${user.telegramId}` }
+                    { text: '🔍 View Details', callback_data: `admin_details_${user.telegramId}` }
                 ]
             ]
         }
@@ -583,7 +542,6 @@ const notifyAdminsNewPayment = async (user, file_id) => {
     }
 };
 
-// ========== MY PROFILE ========== //
 const handleMyProfile = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -600,7 +558,7 @@ const handleMyProfile = async (msg) => {
         `✅ Status: ${user.isVerified ? '✅ Verified' : '⏳ Pending Approval'}\n` +
         `👥 Referrals: ${user.referralCount || 0}\n` +
         `💰 Rewards: ${(user.rewards || 0)} ETB\n` +
-        `📊 Registration: ${user.joinedAt ? new Date(user.joinedAt.toDate ? user.joinedAt.toDate() : user.joinedAt).toLocaleDateString() : 'Not set'}\n` +
+        `📊 Registration: ${user.joinedAt ? new Date(user.joinedAt.seconds * 1000).toLocaleDateString() : 'Not set'}\n` +
         `💳 Account: ${user.accountNumber || 'Not set'}\n` +
         `👤 Account Name: ${user.accountName || 'Not set'}\n\n` +
         `Can Withdraw: ${canWithdraw ? '✅ Yes' : '❌ No'}\n` +
@@ -620,7 +578,6 @@ const handleMyProfile = async (msg) => {
     await bot.sendMessage(chatId, profileMessage, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== INVITE & EARN ========== //
 const handleInviteEarn = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -643,7 +600,6 @@ const handleInviteEarn = async (msg) => {
     await bot.sendMessage(chatId, inviteMessage, { parse_mode: 'Markdown' });
 };
 
-// ========== LEADERBOARD ========== //
 const handleLeaderboard = async (msg) => {
     const chatId = msg.chat.id;
     const topReferrers = await getTopReferrers(10);
@@ -665,7 +621,6 @@ const handleLeaderboard = async (msg) => {
     await bot.sendMessage(chatId, leaderboardText, { parse_mode: 'Markdown' });
 };
 
-// ========== HELP COMMAND ========== //
 const handleHelp = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -701,7 +656,6 @@ const handleHelp = async (msg) => {
     await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 };
 
-// ========== RULES COMMAND ========== //
 const handleRules = async (msg) => {
     const chatId = msg.chat.id;
 
@@ -724,7 +678,6 @@ const handleRules = async (msg) => {
     await bot.sendMessage(chatId, rulesMessage, { parse_mode: 'Markdown' });
 };
 
-// ========== PAY TUTORIAL FEE ========== //
 const handlePayFee = async (msg) => {
     const chatId = msg.chat.id;
 
@@ -747,7 +700,6 @@ const handlePayFee = async (msg) => {
     await bot.sendMessage(chatId, payFeeMessage, { parse_mode: 'Markdown' });
 };
 
-// ========== UPLOAD SCREENSHOT ========== //
 const handleUploadScreenshot = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -773,7 +725,6 @@ const handleUploadScreenshot = async (msg) => {
     );
 };
 
-// ========== WITHDRAW REWARDS ========== //
 const handleWithdrawRewards = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -785,7 +736,7 @@ const handleWithdrawRewards = async (msg) => {
         await bot.sendMessage(chatId,
             `❌ *Insufficient funds for withdrawal*\n\n` +
             `💰 Available: ${user.rewards} ETB\n` +
-            `.Minimum required: ${minWithdrawal} ETB\n\n` +
+            `Minimum required: ${minWithdrawal} ETB\n\n` +
             `Continue earning referrals to reach the minimum!`,
             { parse_mode: 'Markdown' }
         );
@@ -808,7 +759,6 @@ const handleWithdrawRewards = async (msg) => {
         accountNumber: user.accountNumber,
         accountName: user.accountName,
         paymentMethod: user.paymentMethodPreference,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
         status: 'pending'
     });
 
@@ -839,7 +789,6 @@ const handleWithdrawRewards = async (msg) => {
     }
 };
 
-// ========== CHANGE PAYMENT METHOD ========== //
 const handleChangePaymentMethod = async (msg) => {
     const chatId = msg.chat.id;
 
@@ -859,7 +808,6 @@ const handleChangePaymentMethod = async (msg) => {
     );
 };
 
-// ========== SET PAYMENT METHOD ========== //
 const handleSetPaymentMethod = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -880,7 +828,6 @@ const handleSetPaymentMethod = async (msg) => {
     }
 };
 
-// ========== SET ACCOUNT NUMBER ========== //
 const handleSetAccountNumber = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -905,7 +852,6 @@ const handleSetAccountNumber = async (msg) => {
     }
 };
 
-// ========== SET ACCOUNT NAME ========== //
 const handleSetAccountName = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -924,7 +870,6 @@ const handleSetAccountName = async (msg) => {
     await showMainMenu(chatId);
 };
 
-// ========== ADMIN PANEL ========== //
 const handleAdminPanel = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -972,7 +917,6 @@ const handleAdminPanel = async (msg) => {
     await bot.sendMessage(chatId, adminMessage, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== ADMIN MANAGE STUDENTS ========== //
 const handleAdminManageStudents = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -983,7 +927,7 @@ const handleAdminManageStudents = async (msg) => {
     }
 
     const allUsers = await getAllUsers();
-    const usersArray = Object.entries(allUsers).slice(0, 10); // Show first 10 users
+    const usersArray = Object.entries(allUsers).slice(0, 10);
 
     if (usersArray.length === 0) {
         await bot.sendMessage(chatId, '📊 No students found.', { parse_mode: 'Markdown' });
@@ -1009,7 +953,6 @@ const handleAdminManageStudents = async (msg) => {
     await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== ADMIN REVIEW PAYMENTS ========== //
 const handleAdminReviewPayments = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -1027,7 +970,7 @@ const handleAdminReviewPayments = async (msg) => {
     }
 
     let message = `💰 *PENDING PAYMENTS (${pendingPayments.length})*\n\n`;
-    for (const payment of pendingPayments.slice(0, 5)) { // Show first 5
+    for (const payment of pendingPayments.slice(0, 5)) {
         const user = await getUser(payment.userId);
         message += `• ${user?.firstName || 'Unknown'} - ${payment.paymentMethod} - ${REGISTRATION_FEE} ETB\n`;
     }
@@ -1046,7 +989,6 @@ const handleAdminReviewPayments = async (msg) => {
     await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== ADMIN STUDENT STATS ========== //
 const handleAdminStats = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -1071,7 +1013,7 @@ const handleAdminStats = async (msg) => {
         `💳 Pending Withdrawals: ${pendingWithdrawals.length}\n` +
         `💰 Total Referrals: ${totalReferrals}\n` +
         `🎁 Total Rewards: ${totalRewards} ETB\n` +
-        `📅 Active Since: ${Object.values(allUsers)[0]?.joinedAt ? new Date(Object.values(allUsers)[0].joinedAt.toDate ? Object.values(allUsers)[0].joinedAt.toDate() : Object.values(allUsers)[0].joinedAt).toLocaleDateString() : 'N/A'}`;
+        `📅 Active Since: ${Object.values(allUsers)[0]?.joinedAt ? new Date(Object.values(allUsers)[0].joinedAt.seconds * 1000).toLocaleDateString() : 'N/A'}`;
 
     const options = {
         reply_markup: {
@@ -1087,7 +1029,6 @@ const handleAdminStats = async (msg) => {
     await bot.sendMessage(chatId, statsMessage, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== ADMIN BOT SETTINGS ========== //
 const handleAdminBotSettings = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -1125,114 +1066,7 @@ const handleAdminBotSettings = async (msg) => {
     await bot.sendMessage(chatId, settingsMessage, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== ADMIN EDIT MESSAGES ========== //
-const handleAdminEditMessages = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    const message = 
-        `✏️ *EDIT MESSAGES*\n\n` +
-        `Select message to edit:\n\n` +
-        `• Welcome message\n` +
-        `• Registration prompts\n` +
-        `• Help text\n` +
-        `• Rules text\n` +
-        `• Profile display\n` +
-        `• Admin notifications`;
-
-    const options = {
-        reply_markup: {
-            keyboard: [
-                [{ text: '📝 Welcome Message' }, { text: '📝 Registration Messages' }],
-                [{ text: '📝 Help Message' }, { text: '📝 Rules Message' }],
-                [{ text: '📝 Profile Message' }, { text: '📝 Admin Messages' }],
-                [{ text: '🔙 Back to Admin' }]
-            ],
-            resize_keyboard: true
-        }
-    };
-
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...options });
-};
-
-// ========== ADMIN EDIT BUTTONS ========== //
-const handleAdminEditButtons = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    const message = 
-        `✏️ *EDIT BUTTONS*\n\n` +
-        `Select button to edit:\n\n` +
-        `• Main menu buttons\n` +
-        `• Registration buttons\n` +
-        `• Profile buttons\n` +
-        `• Admin panel buttons`;
-
-    const options = {
-        reply_markup: {
-            keyboard: [
-                [{ text: '📝 Main Menu Buttons' }, { text: '📝 Registration Buttons' }],
-                [{ text: '📝 Profile Buttons' }, { text: '📝 Admin Buttons' }],
-                [{ text: '🔙 Back to Admin' }]
-            ],
-            resize_keyboard: true
-        }
-    };
-
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...options });
-};
-
-// ========== ADMIN EDIT FEES ========== //
-const handleAdminEditFees = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    const message = 
-        `💰 *EDIT FEES*\n\n` +
-        `Current settings:\n` +
-        `• Registration Fee: ${REGISTRATION_FEE} ETB\n` +
-        `• Referral Reward: ${REFERRAL_REWARD} ETB\n` +
-        `• Min Referrals: ${MIN_REFERRALS_FOR_WITHDRAW}\n\n` +
-        `Send new value for registration fee (ETB):`;
-
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-};
-
-// ========== ADMIN TOGGLE WITHDRAWAL ========== //
-const handleAdminToggleWithdrawal = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    // This would typically update a settings document in Firebase
-    await bot.sendMessage(chatId,
-        `💳 *WITHDRAWAL FEATURE*\n\n` +
-        `Withdrawal feature status: [CURRENTLY ACTIVE]\n\n` +
-        `Use Firebase settings to toggle this feature.`,
-        { parse_mode: 'Markdown' }
-    );
-};
-
-// ========== MESSAGE HANDLER ========== //
+// ========== COMPLETE MESSAGE HANDLER ========== //
 const handleMessage = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -1240,195 +1074,184 @@ const handleMessage = async (msg) => {
 
     if (!text) return;
 
-    // Handle commands
-    if (text.startsWith('/')) {
-        switch (text) {
-            case '/start':
-                await handleStart(msg);
-                break;
-            case '/admin':
-                await handleAdminPanel(msg);
-                break;
-            case '/help':
-                await handleHelp(msg);
-                break;
-            case '/stats':
-                await handleAdminStats(msg);
-                break;
-            case '/users':
-                await handleAdminManageStudents(msg);
-                break;
-            case '/payments':
-                await handleAdminReviewPayments(msg);
-                break;
-            default:
-                await showMainMenu(chatId);
-        }
-    } else {
-        // Handle button clicks
-        switch (text) {
-            case '📚 Register for Tutorial':
-                await handleRegisterTutorial(msg);
-                break;
-            case '👤 My Profile':
-                await handleMyProfile(msg);
-                break;
-            case '🎁 Invite & Earn':
-                await handleInviteEarn(msg);
-                break;
-            case '📈 Leaderboard':
-                await handleLeaderboard(msg);
-                break;
-            case '❓ Help':
-                await handleHelp(msg);
-                break;
-            case '📌 Rules':
-                await handleRules(msg);
-                break;
-            case '💰 Pay Tutorial Fee':
-                await handlePayFee(msg);
-                break;
-            case '📤 Upload Payment Screenshot':
-                await handleUploadScreenshot(msg);
-                break;
-            case '💰 Withdraw Rewards':
-                await handleWithdrawRewards(msg);
-                break;
-            case '💳 Change Payment Method':
-                await handleChangePaymentMethod(msg);
-                break;
-            case '📊 My Referrals':
-                // Show user's referrals
-                const referrals = await getUserReferrals(userId);
-                let referralText = `📊 *MY REFERRALS (${referrals.length})*\n\n`;
-                referrals.forEach((referral, index) => {
-                    referralText += `${index + 1}. ${referral.firstName}\n`;
-                });
-                await bot.sendMessage(chatId, referralText, { parse_mode: 'Markdown' });
-                break;
-            case '📝 Set Username':
-            case '📝 Set Bio':
-                await bot.sendMessage(chatId, `Coming soon: ${text}`, { parse_mode: 'Markdown' });
-                break;
-            case '📱 TeleBirr':
-            case '🏦 CBE Birr':
-                await handleSetPaymentMethod(msg);
-                break;
-            case '🔙 Back to Menu':
-                await showMainMenu(chatId);
-                break;
-            
-            // Admin Panel Buttons
-            case '👥 Manage Students':
-                await handleAdminManageStudents(msg);
-                break;
-            case '💰 Review Payments':
-                await handleAdminReviewPayments(msg);
-                break;
-            case '📊 Student Stats':
-                await handleAdminStats(msg);
-                break;
-            case '❌ Block Student':
-                await bot.sendMessage(chatId, 'Coming soon: Block Student feature', { parse_mode: 'Markdown' });
-                break;
-            case '📈 Registration Trends':
-                await bot.sendMessage(chatId, 'Coming soon: Registration Trends', { parse_mode: 'Markdown' });
-                break;
-            case '👤 Add Admin':
-                await bot.sendMessage(chatId, 'Coming soon: Add Admin', { parse_mode: 'Markdown' });
-                break;
-            case '🔧 Maintenance Mode':
-                await bot.sendMessage(chatId, 'Coming soon: Maintenance Mode', { parse_mode: 'Markdown' });
-                break;
-            case '✉️ Message Student':
-                await bot.sendMessage(chatId, 'Coming soon: Message Student', { parse_mode: 'Markdown' });
-                break;
-            case '📢 Broadcast Message':
-                await bot.sendMessage(chatId, 'Coming soon: Broadcast Message', { parse_mode: 'Markdown' });
-                break;
-            case '⚙️ Bot Settings':
-                await handleAdminBotSettings(msg);
-                break;
-            case '✏️ Edit Messages':
-                await handleAdminEditMessages(msg);
-                break;
-            case '✏️ Edit Buttons':
-                await handleAdminEditButtons(msg);
-                break;
-            case '💰 Edit Fees':
-                await handleAdminEditFees(msg);
-                break;
-            case '👥 Edit Admins':
-                await bot.sendMessage(chatId, 'Coming soon: Edit Admins', { parse_mode: 'Markdown' });
-                break;
-            case '💳 Toggle Withdrawal':
-                await handleAdminToggleWithdrawal(msg);
-                break;
-            case '📝 Welcome Message':
-            case '📝 Registration Messages':
-            case '📝 Help Message':
-            case '📝 Rules Message':
-            case '📝 Profile Message':
-            case '📝 Admin Messages':
-            case '📝 Main Menu Buttons':
-            case '📝 Registration Buttons':
-            case '📝 Profile Buttons':
-            case '📝 Admin Buttons':
-            case '📊 Export Data':
-            case '🔍 View Details':
-            case '✉️ Message':
-            case '✅ Approve Payment':
-            case '🔍 View All':
-            case '✅ Approve All':
-            case '❌ Reject All':
-            case '📈 Daily Trends':
-            case '📈 Weekly Trends':
-            case '📈 Monthly Trends':
-            case '📊 Export Stats':
-            case '➕ Add Button':
-            case '🗑️ Delete Button':
-            case '📊 Export Users':
-            case '💰 Export Payments':
-            case '👥 Export Referrals':
-            case '📅 Export by Date':
-            case '🔙 Back to Admin':
-                await handleAdminPanel(msg);
-                break;
-            
-            // Registration flow
-            case '📚 Social Science':
-            case '🔬 Natural Science':
-                await handleStudentTypeSelection(msg);
-                break;
-            case '❌ Cancel Registration':
-                const user = await getUser(userId);
-                user.registrationStep = 'not_started';
-                user.paymentStatus = 'not_started';
-                await setUser(userId, user);
-                
-                await bot.sendMessage(chatId,
-                    `❌ *Registration cancelled.*\n\n` +
-                    `You can start again anytime.`,
-                    { parse_mode: 'Markdown' }
-                );
-                await showMainMenu(chatId);
-                break;
-            default:
-                // Handle name, phone, account number, account name based on user state
-                const user = await getUser(userId);
-                
-                if (user.registrationStep === 'waiting_name') {
-                    await handleNameInput(msg);
-                } else if (user.registrationStep === 'waiting_phone') {
-                    await handlePhoneInput(msg);
-                } else if (user.paymentMethodPreference && !user.accountNumber) {
-                    await handleSetAccountNumber(msg);
-                } else if (user.accountNumber && !user.accountName) {
-                    await handleSetAccountName(msg);
-                } else {
+    try {
+        if (text.startsWith('/')) {
+            switch (text) {
+                case '/start':
+                    await handleStart(msg);
+                    break;
+                case '/admin':
+                    await handleAdminPanel(msg);
+                    break;
+                case '/help':
+                    await handleHelp(msg);
+                    break;
+                case '/stats':
+                    await handleAdminStats(msg);
+                    break;
+                case '/users':
+                    await handleAdminManageStudents(msg);
+                    break;
+                case '/payments':
+                    await handleAdminReviewPayments(msg);
+                    break;
+                default:
                     await showMainMenu(chatId);
-                }
+            }
+        } else {
+            switch (text) {
+                case '📚 Register for Tutorial':
+                    await handleRegisterTutorial(msg);
+                    break;
+                case '👤 My Profile':
+                    await handleMyProfile(msg);
+                    break;
+                case '🎁 Invite & Earn':
+                    await handleInviteEarn(msg);
+                    break;
+                case '📈 Leaderboard':
+                    await handleLeaderboard(msg);
+                    break;
+                case '❓ Help':
+                    await handleHelp(msg);
+                    break;
+                case '📌 Rules':
+                    await handleRules(msg);
+                    break;
+                case '💰 Pay Tutorial Fee':
+                    await handlePayFee(msg);
+                    break;
+                case '📤 Upload Payment Screenshot':
+                    await handleUploadScreenshot(msg);
+                    break;
+                case '💰 Withdraw Rewards':
+                    await handleWithdrawRewards(msg);
+                    break;
+                case '💳 Change Payment Method':
+                    await handleChangePaymentMethod(msg);
+                    break;
+                case '📊 My Referrals':
+                    const referrals = await getUserReferrals(userId);
+                    let referralText = `📊 *MY REFERRALS (${referrals.length})*\n\n`;
+                    referrals.forEach((referral, index) => {
+                        referralText += `${index + 1}. ${referral.firstName}\n`;
+                    });
+                    await bot.sendMessage(chatId, referralText, { parse_mode: 'Markdown' });
+                    break;
+                case '📝 Set Username':
+                case '📝 Set Bio':
+                    await bot.sendMessage(chatId, `Coming soon: ${text}`, { parse_mode: 'Markdown' });
+                    break;
+                case '📱 TeleBirr':
+                case '🏦 CBE Birr':
+                    await handleSetPaymentMethod(msg);
+                    break;
+                case '👥 Manage Students':
+                    await handleAdminManageStudents(msg);
+                    break;
+                case '💰 Review Payments':
+                    await handleAdminReviewPayments(msg);
+                    break;
+                case '📊 Student Stats':
+                    await handleAdminStats(msg);
+                    break;
+                case '❌ Block Student':
+                    await bot.sendMessage(chatId, 'Coming soon: Block Student feature', { parse_mode: 'Markdown' });
+                    break;
+                case '📈 Registration Trends':
+                    await bot.sendMessage(chatId, 'Coming soon: Registration Trends', { parse_mode: 'Markdown' });
+                    break;
+                case '👤 Add Admin':
+                    await bot.sendMessage(chatId, 'Coming soon: Add Admin', { parse_mode: 'Markdown' });
+                    break;
+                case '🔧 Maintenance Mode':
+                    await bot.sendMessage(chatId, 'Coming soon: Maintenance Mode', { parse_mode: 'Markdown' });
+                    break;
+                case '✉️ Message Student':
+                    await bot.sendMessage(chatId, 'Coming soon: Message Student', { parse_mode: 'Markdown' });
+                    break;
+                case '📢 Broadcast Message':
+                    await bot.sendMessage(chatId, 'Coming soon: Broadcast Message', { parse_mode: 'Markdown' });
+                    break;
+                case '⚙️ Bot Settings':
+                    await handleAdminBotSettings(msg);
+                    break;
+                case '✏️ Edit Messages':
+                    await bot.sendMessage(chatId, 'Coming soon: Edit Messages', { parse_mode: 'Markdown' });
+                    break;
+                case '✏️ Edit Buttons':
+                    await bot.sendMessage(chatId, 'Coming soon: Edit Buttons', { parse_mode: 'Markdown' });
+                    break;
+                case '💰 Edit Fees':
+                    await bot.sendMessage(chatId, 'Coming soon: Edit Fees', { parse_mode: 'Markdown' });
+                    break;
+                case '👥 Edit Admins':
+                    await bot.sendMessage(chatId, 'Coming soon: Edit Admins', { parse_mode: 'Markdown' });
+                    break;
+                case '💳 Toggle Withdrawal':
+                    await bot.sendMessage(chatId, 'Coming soon: Toggle Withdrawal', { parse_mode: 'Markdown' });
+                    break;
+                case '📊 Export Data':
+                    await bot.sendMessage(chatId, 'Coming soon: Export Data', { parse_mode: 'Markdown' });
+                    break;
+                case '🔍 View Details':
+                case '✉️ Message':
+                case '✅ Approve Payment':
+                case '🔍 View All':
+                case '✅ Approve All':
+                case '❌ Reject All':
+                case '📈 Daily Trends':
+                case '📈 Weekly Trends':
+                case '📈 Monthly Trends':
+                case '📊 Export Stats':
+                case '➕ Add Button':
+                case '🗑️ Delete Button':
+                case '📊 Export Users':
+                case '💰 Export Payments':
+                case '👥 Export Referrals':
+                case '📅 Export by Date':
+                case '🔙 Back to Admin':
+                    await handleAdminPanel(msg);
+                    break;
+                case '📚 Social Science':
+                case '🔬 Natural Science':
+                    await handleStudentTypeSelection(msg);
+                    break;
+                case '❌ Cancel Registration':
+                    const user = await getUser(userId);
+                    user.registrationStep = 'not_started';
+                    user.paymentStatus = 'not_started';
+                    await setUser(userId, user);
+                    
+                    await bot.sendMessage(chatId,
+                        `❌ *Registration cancelled.*\n\n` +
+                        `You can start again anytime.`,
+                        { parse_mode: 'Markdown' }
+                    );
+                    await showMainMenu(chatId);
+                    break;
+                case '🔙 Back to Menu':
+                    await showMainMenu(chatId);
+                    break;
+                default:
+                    // Handle registration flow
+                    const user = await getUser(userId);
+                    if (user.registrationStep === 'waiting_name') {
+                        await handleNameInput(msg);
+                    } else if (user.registrationStep === 'waiting_phone') {
+                        await handlePhoneInput(msg);
+                    } else if (user.paymentMethodPreference && !user.accountNumber) {
+                        await handleSetAccountNumber(msg);
+                    } else if (user.accountNumber && !user.accountName) {
+                        await handleSetAccountName(msg);
+                    } else {
+                        await showMainMenu(chatId);
+                    }
+            }
         }
+    } catch (error) {
+        console.error('Error handling message:', error);
+        await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
     }
 };
 
@@ -1476,7 +1299,7 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 };
 
-// ========== ADMIN APPROVE ========== //
+// ========== ADMIN FUNCTIONS ========== //
 const handleAdminApprove = async (targetUserId, adminId) => {
     const user = await getUser(targetUserId);
     if (user) {
@@ -1503,7 +1326,6 @@ const handleAdminApprove = async (targetUserId, adminId) => {
     }
 };
 
-// ========== ADMIN REJECT ========== //
 const handleAdminReject = async (targetUserId, adminId) => {
     const user = await getUser(targetUserId);
     if (user) {
@@ -1529,7 +1351,6 @@ const handleAdminReject = async (targetUserId, adminId) => {
     }
 };
 
-// ========== ADMIN DETAILS ========== //
 const handleAdminDetails = async (targetUserId, adminId) => {
     const user = await getUser(targetUserId);
     if (user) {
@@ -1541,7 +1362,7 @@ const handleAdminDetails = async (targetUserId, adminId) => {
             `✅ Verified: ${user.isVerified ? 'Yes' : 'No'}\n` +
             `👥 Referrals: ${user.referralCount || 0}\n` +
             `💰 Rewards: ${user.rewards || 0} ETB\n` +
-            `📊 Joined: ${user.joinedAt ? new Date(user.joinedAt.toDate ? user.joinedAt.toDate() : user.joinedAt).toLocaleDateString() : 'N/A'}\n` +
+            `📊 Joined: ${user.joinedAt ? new Date(user.joinedAt.seconds * 1000).toLocaleDateString() : 'N/A'}\n` +
             `💳 Account: ${user.accountNumber || 'Not set'}\n` +
             `🆔 User ID: ${user.telegramId}`;
 
@@ -1562,7 +1383,7 @@ module.exports = async (req, res) => {
         return res.status(200).end();
     }
 
-    // Handle GET requests
+    // Handle GET requests - health check
     if (req.method === 'GET') {
         const allUsers = await getAllUsers();
         const verifiedUsers = await getVerifiedUsers();
@@ -1583,7 +1404,7 @@ module.exports = async (req, res) => {
         });
     }
 
-    // Handle POST requests (Telegram webhook updates)
+    // Handle POST requests (Telegram webhook)
     if (req.method === 'POST') {
         try {
             const update = req.body;
@@ -1606,4 +1427,4 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: 'Method not allowed' });
 };
 
-console.log('✅ Complete Tutorial Registration Bot with Firebase configured for Vercel!');
+console.log('✅ Complete Tutorial Registration Bot configured for Vercel!');

@@ -295,6 +295,7 @@ const handleStart = async (msg) => {
     await showMainMenu(chatId);
 };
 
+// NEW: handleRegisterTutorial - Hybrid buttons
 const handleRegisterTutorial = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -315,100 +316,68 @@ const handleRegisterTutorial = async (msg) => {
         return;
     }
 
-    user.registrationStep = 'waiting_student_type';
-    user.paymentStatus = 'in_progress';
-    await setUser(userId, user);
+    const registrationForm = 
+        `📝 *COMPLETE REGISTRATION FORM*\n\n` +
+        `👤 *PERSONAL DETAILS:*\n` +
+        `📋 Full Name: (Type your name in chat)\n` +
+        `📱 Phone: Use share button below 👇\n\n` +
+        `🎓 *STUDENT TYPE:*\n` +
+        `Choose your field:`;
 
-    const options = {
+    // INLINE BUTTONS for selections
+    const inlineOptions = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🔘 Social Science', callback_data: 'select_social' },
+                    { text: '⚪ Natural Science', callback_data: 'select_natural' }
+                ]
+            ]
+        }
+    };
+
+    // REPLY KEYBOARD for actions
+    const replyOptions = {
         reply_markup: {
             keyboard: [
-                [{ text: '📚 Social Science' }, { text: '🔬 Natural Science' }],
-                [{ text: '❌ Cancel Registration' }]
+                [{ text: "📲 Share My Phone Number", request_contact: true }],
+                [{ text: '✅ SUBMIT REGISTRATION' }, { text: '🔄 START OVER' }]
             ],
             resize_keyboard: true
         }
     };
 
-    await bot.sendMessage(chatId,
-        `🎯 *REGISTRATION STEP 1/6*\n\n` +
-        `Are you Social Science or Natural Science student?`,
-        { parse_mode: 'Markdown', ...options }
-    );
+    user.registrationStep = 'filling_single_form';
+    user.paymentStatus = 'not_started';
+    await setUser(userId, user);
+
+    // Send form with inline buttons
+    await bot.sendMessage(chatId, registrationForm, { parse_mode: 'Markdown', ...inlineOptions });
+    
+    // Show action buttons at bottom
+    await bot.sendMessage(chatId, 'Use buttons below to complete your registration:', { ...replyOptions });
 };
 
-const handleStudentTypeSelection = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
+// NEW: Show payment method selection
+const showPaymentMethods = async (chatId, userId) => {
+    const paymentMessage = 
+        `💳 *SELECT PAYMENT METHOD*\n\n` +
+        `Choose how you want to pay:`;
 
-    if (text === '📚 Social Science' || text === '🔬 Natural Science') {
-        const studentType = text.includes('Social') ? 'Social Science' : 'Natural Science';
-        const user = await getUser(userId);
-        
-        user.studentType = studentType;
-        user.registrationStep = 'waiting_name';
-        await setUser(userId, user);
+    const paymentOptions = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🔘 TeleBirr', callback_data: 'payment_telebirr' },
+                    { text: '⚪ CBE Birr', callback_data: 'payment_cbe' }
+                ]
+            ]
+        }
+    };
 
-        await bot.sendMessage(chatId,
-            `🎯 *REGISTRATION STEP 2/6*\n\n` +
-            `Enter your full name:`,
-            { parse_mode: 'Markdown' }
-        );
-    } else if (text === '❌ Cancel Registration') {
-        const user = await getUser(userId);
-        user.registrationStep = 'not_started';
-        user.paymentStatus = 'not_started';
-        await setUser(userId, user);
-        
-        await bot.sendMessage(chatId,
-            `❌ *Registration cancelled.*\n\n` +
-            `You can start again anytime.`,
-            { parse_mode: 'Markdown' }
-        );
-        await showMainMenu(chatId);
-    }
+    await bot.sendMessage(chatId, paymentMessage, { parse_mode: 'Markdown', ...paymentOptions });
 };
 
-const handleNameInput = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
-    const user = await getUser(userId);
-
-    if (user.registrationStep === 'waiting_name') {
-        user.name = text;
-        user.registrationStep = 'waiting_phone';
-        await setUser(userId, user);
-
-        await bot.sendMessage(chatId,
-            `🎯 *REGISTRATION STEP 3/6*\n\n` +
-            `Enter your phone number (with country code):`,
-            { parse_mode: 'Markdown' }
-        );
-    }
-};
-
-const handlePhoneInput = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
-    const user = await getUser(userId);
-
-    if (user.registrationStep === 'waiting_phone') {
-        if (text.startsWith('+') && text.length >= 10) {
-            user.phone = text;
-            user.registrationStep = 'waiting_payment_method';
-            await setUser(userId, user);
-
-            const options = {
-                reply_markup: {
-                    keyboard: [
-                        [{ text: '📱 TeleBirr' }, { text: '🏦 CBE Birr' }],
-                        [{ text: '❌ Cancel Registration' }]
-                    ],
-                    resize_keyboard: true
-                }
-            };
 
             await bot.sendMessage(chatId,
                 `🎯 *REGISTRATION STEP 4/6*\n\n` +

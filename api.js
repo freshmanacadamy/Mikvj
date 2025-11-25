@@ -507,7 +507,6 @@ const handlePaymentScreenshot = async (msg) => {
         }
     }
 };
-
 const notifyAdminsNewPayment = async (user, file_id) => {
     const notificationMessage = 
         `🔔 *NEW PAYMENT RECEIVED*\n\n` +
@@ -531,7 +530,7 @@ const notifyAdminsNewPayment = async (user, file_id) => {
                     { text: '❌ Reject', callback_data: `admin_reject_${user.telegramId}` }
                 ],
                 [
-                    { text: '🔍 View Details', callback_ `admin_details_${user.telegramId}` }
+                    { text: '🔍 View Details', callback_data: `admin_details_${user.telegramId}` } // ✅ FIXED: Added "data:"
                 ]
             ]
         }
@@ -549,6 +548,7 @@ const notifyAdminsNewPayment = async (user, file_id) => {
         }
     }
 };
+ 
 
 const handleMyProfile = async (msg) => {
     const chatId = msg.chat.id;

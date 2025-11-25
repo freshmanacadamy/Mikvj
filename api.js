@@ -50,8 +50,8 @@ if (!BOT_TOKEN) {
     throw new Error('❌ BOT_TOKEN environment variable is required');
 }
 
-// Create bot instance (webhook mode for Vercel)
-const bot = new TelegramBot(BOT_TOKEN);
+// Create bot instance (webhook mode for Vercel) - no polling
+const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
 // ========== DATABASE FUNCTIONS ========== //
 const getUser = async (userId) => {
@@ -608,6 +608,9 @@ const handleCallbackQuery = async (callbackQuery) => {
         } else if (data.startsWith('admin_reject_')) {
             const targetUserId = parseInt(data.replace('admin_reject_', ''));
             await handleAdminReject(targetUserId, userId);
+        } else if (data.startsWith('admin_details_')) {
+            const targetUserId = parseInt(data.replace('admin_details_', ''));
+            await handleAdminDetails(targetUserId, userId);
         }
 
         await bot.answerCallbackQuery(callbackQuery.id);
@@ -666,6 +669,22 @@ const handleAdminReject = async (targetUserId, adminId) => {
             `❌ *Payment rejected for user ${targetUserId}*`,
             { parse_mode: 'Markdown' }
         );
+    }
+};
+
+const handleAdminDetails = async (targetUserId, adminId) => {
+    const user = await getUser(targetUserId);
+    if (user) {
+        const detailsMessage = 
+            `🔍 *USER DETAILS*\n\n` +
+            `👤 Name: ${user.name || 'Not set'}\n` +
+            `📱 Phone: ${user.phone || 'Not set'}\n` +
+            `🎓 Student Type: ${user.studentType || 'Not set'}\n` +
+            `🆔 User ID: ${user.telegramId}\n` +
+            `✅ Verified: ${user.isVerified ? 'Yes' : 'No'}\n` +
+            `📊 Registration Step: ${user.registrationStep || 'Not started'}`;
+
+        await bot.sendMessage(adminId, detailsMessage, { parse_mode: 'Markdown' });
     }
 };
 
@@ -803,12 +822,11 @@ module.exports = async (req, res) => {
         try {
             const update = req.body;
 
+            // Process different types of updates
             if (update.message) {
                 await handleMessage(update.message);
             } else if (update.callback_query) {
                 await handleCallbackQuery(update.callback_query);
-            } else if (update.message && update.message.photo) {
-                await handlePaymentScreenshot(update.message);
             }
 
             return res.status(200).json({ ok: true });

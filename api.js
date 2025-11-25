@@ -189,6 +189,7 @@ const getPendingWithdrawals = async () => {
         return [];
     }
 };
+
 // ========== BOT HANDLERS ========== //
 const showMainMenu = async (chatId) => {
     const options = {
@@ -213,23 +214,227 @@ const showMainMenu = async (chatId) => {
     );
 };
 
-const showConstantMenu = async (chatId) => {
-    const options = {
+// ========== NEW REGISTRATION SYSTEM ========== //
+
+// NEW: Show payment method selection with account details
+const showPaymentMethods = async (chatId, userId) => {
+    const user = await getUser(userId);
+    
+    const paymentMessage = 
+        `💳 *SELECT PAYMENT METHOD*\n\n` +
+        `Choose how you want to pay ${REGISTRATION_FEE} ETB:`;
+
+    const paymentOptions = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🔘 TeleBirr', callback_data: 'payment_telebirr' },
+                    { text: '⚪ CBE Birr', callback_data: 'payment_cbe' }
+                ]
+            ]
+        }
+    };
+
+    await bot.sendMessage(chatId, paymentMessage, { parse_mode: 'Markdown', ...paymentOptions });
+};
+
+// NEW: Show account details after payment method selection
+const showAccountDetails = async (chatId, paymentMethod) => {
+    // These would come from database in production
+    const accountDetails = {
+        'TeleBirr': {
+            number: '+251 91 234 5678',
+            name: 'TUTORIAL ETHIOPIA'
+        },
+        'CBE Birr': {
+            number: '1000 2345 6789', 
+            name: 'TUTORIAL ETHIOPIA'
+        }
+    };
+
+    const account = accountDetails[paymentMethod];
+    
+    const accountMessage = 
+        `✅ SELECTED: ${paymentMethod}\n\n` +
+        `📱 Account Number: ${account.number}\n` +
+        `👤 Account Name: ${account.name}\n\n` +
+        `💡 Payment Instructions:\n` +
+        `1. Send exactly ${REGISTRATION_FEE} ETB to above account\n` +
+        `2. Take clear screenshot of transaction\n` +
+        `3. Upload using the button below\n\n` +
+        `📸 Ready to upload your payment screenshot?`;
+
+    const uploadOptions = {
         reply_markup: {
             keyboard: [
-                [{ text: '🎁 Invite & Earn' }, { text: '❓ Help' }],
-                [{ text: '📌 Rules' }, { text: '👤 My Profile' }]
+                [{ text: '📎 Upload Payment Screenshot' }],
+                [{ text: '🔙 Change Payment Method' }, { text: '🔄 Start Over' }]
             ],
             resize_keyboard: true
         }
     };
+
+    await bot.sendMessage(chatId, accountMessage, { parse_mode: 'Markdown', ...uploadOptions });
+};
+
+// NEW: Single form registration
+const handleRegisterTutorial = async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const user = await getUser(userId);
+
+    if (user.blocked) {
+        await bot.sendMessage(chatId, '❌ You are blocked from using this bot.', { parse_mode: 'Markdown' });
+        return;
+    }
+
+    if (user.isVerified) {
+        await bot.sendMessage(chatId,
+            `✅ *You are already registered!*\n\n` +
+            `Your account is verified and active.`,
+            { parse_mode: 'Markdown' }
+        );
+        await showMainMenu(chatId);
+        return;
+    }
+
+    const registrationForm = 
+        `📝 *COMPLETE REGISTRATION FORM*\n\n` +
+        `👤 *PERSONAL DETAILS:*\n` +
+        `📋 Full Name: (Type your name in chat)\n` +
+        `📱 Phone: Use share button below 👇\n\n` +
+        `🎓 *STUDENT TYPE:*\n` +
+        `Choose your field:`;
+
+    // INLINE BUTTONS for selections
+    const inlineOptions = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🔘 Social Science', callback_data: 'select_social' },
+                    { text: '⚪ Natural Science', callback_data: 'select_natural' }
+                ]
+            ]
+        }
+    };
+
+    // REPLY KEYBOARD for actions
+    const replyOptions = {
+        reply_markup: {
+            keyboard: [
+                [{ text: "📲 Share My Phone Number", request_contact: true }],
+                [{ text: '✅ SUBMIT REGISTRATION' }, { text: '🔄 START OVER' }]
+            ],
+            resize_keyboard: true
+        }
+    };
+
+    // Reset user data for new registration
+    user.registrationStep = 'filling_single_form';
+    user.paymentStatus = 'not_started';
+    user.name = null;
+    user.phone = null;
+    user.studentType = null;
+    user.paymentMethod = null;
+    await setUser(userId, user);
+
+    // Send form with inline buttons
+    await bot.sendMessage(chatId, registrationForm, { parse_mode: 'Markdown', ...inlineOptions });
     
-    await bot.sendMessage(chatId,
-        `🎯 *REGISTRATION IN PROGRESS*\n\n` +
-        `You are currently in the registration process.\n` +
-        `Use the buttons below for additional options:`,
-        { parse_mode: 'Markdown', ...options }
-    );
+    // Show action buttons at bottom
+    await bot.sendMessage(chatId, 'Use buttons below to complete your registration:', { ...replyOptions });
+};
+
+// NEW: Handle contact sharing
+const handleContactShared = async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const user = await getUser(userId);
+
+    if (user.registrationStep === 'filling_single_form' && msg.contact) {
+        user.phone = msg.contact.phone_number;
+        await setUser(userId, user);
+
+        await bot.sendMessage(chatId,
+            `✅ Phone number saved: ${msg.contact.phone_number}\n\n` +
+            `Now please type your full name in the chat.`,
+            { parse_mode: 'Markdown' }
+        );
+    }
+};
+
+// NEW: Handle name input
+const handleNameInput = async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const text = msg.text;
+    const user = await getUser(userId);
+
+    if (user.registrationStep === 'filling_single_form' && text && !text.startsWith('/') && 
+        !['✅ SUBMIT REGISTRATION', '🔄 START OVER', '📲 Share My Phone Number'].includes(text)) {
+        
+        user.name = text;
+        await setUser(userId, user);
+
+        await bot.sendMessage(chatId,
+            `✅ Name saved: ${text}\n\n` +
+            `Great! Now select your student type using the buttons above.`,
+            { parse_mode: 'Markdown' }
+        );
+    }
+};
+
+// NEW: Handle form submission
+const handleFormSubmission = async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const user = await getUser(userId);
+
+    if (user.registrationStep === 'filling_single_form' && msg.text === '✅ SUBMIT REGISTRATION') {
+        // Validate all fields
+        if (!user.name || !user.phone || !user.studentType) {
+            const missingFields = [];
+            if (!user.name) missingFields.push('• Full Name');
+            if (!user.phone) missingFields.push('• Phone Number');
+            if (!user.studentType) missingFields.push('• Student Type');
+
+            await bot.sendMessage(chatId,
+                `❌ *Incomplete Form*\n\n` +
+                `Please complete these fields:\n${missingFields.join('\n')}\n\n` +
+                `Fill the missing information and submit again.`,
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        // All fields filled, show payment methods
+        await showPaymentMethods(chatId, userId);
+    }
+};
+
+// NEW: Handle start over
+const handleStartOver = async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (msg.text === '🔄 START OVER') {
+        const user = await getUser(userId);
+        user.registrationStep = 'not_started';
+        user.paymentStatus = 'not_started';
+        user.name = null;
+        user.phone = null;
+        user.studentType = null;
+        user.paymentMethod = null;
+        await setUser(userId, user);
+
+        await bot.sendMessage(chatId,
+            `🔄 Registration restarted.\n\n` +
+            `Let's begin fresh!`,
+            { parse_mode: 'Markdown' }
+        );
+        
+        await handleRegisterTutorial(msg);
+    }
 };
 
 const handleStart = async (msg) => {
@@ -295,229 +500,6 @@ const handleStart = async (msg) => {
     await showMainMenu(chatId);
 };
 
-// NEW: handleRegisterTutorial - Hybrid buttons
-const handleRegisterTutorial = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const user = await getUser(userId);
-
-    if (user.blocked) {
-        await bot.sendMessage(chatId, '❌ You are blocked from using this bot.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    if (user.isVerified) {
-        await bot.sendMessage(chatId,
-            `✅ *You are already registered!*\n\n` +
-            `Your account is verified and active.`,
-            { parse_mode: 'Markdown' }
-        );
-        await showMainMenu(chatId);
-        return;
-    }
-
-    const registrationForm = 
-        `📝 *COMPLETE REGISTRATION FORM*\n\n` +
-        `👤 *PERSONAL DETAILS:*\n` +
-        `📋 Full Name: (Type your name in chat)\n` +
-        `📱 Phone: Use share button below 👇\n\n` +
-        `🎓 *STUDENT TYPE:*\n` +
-        `Choose your field:`;
-
-    // INLINE BUTTONS for selections
-    const inlineOptions = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '🔘 Social Science', callback_data: 'select_social' },
-                    { text: '⚪ Natural Science', callback_data: 'select_natural' }
-                ]
-            ]
-        }
-    };
-
-    // REPLY KEYBOARD for actions
-    const replyOptions = {
-        reply_markup: {
-            keyboard: [
-                [{ text: "📲 Share My Phone Number", request_contact: true }],
-                [{ text: '✅ SUBMIT REGISTRATION' }, { text: '🔄 START OVER' }]
-            ],
-            resize_keyboard: true
-        }
-    };
-
-    user.registrationStep = 'filling_single_form';
-    user.paymentStatus = 'not_started';
-    await setUser(userId, user);
-
-    // Send form with inline buttons
-    await bot.sendMessage(chatId, registrationForm, { parse_mode: 'Markdown', ...inlineOptions });
-    
-    // Show action buttons at bottom
-    await bot.sendMessage(chatId, 'Use buttons below to complete your registration:', { ...replyOptions });
-};
-
-// NEW: Show payment method selection
-const showPaymentMethods = async (chatId, userId) => {
-    const paymentMessage = 
-        `💳 *SELECT PAYMENT METHOD*\n\n` +
-        `Choose how you want to pay:`;
-
-    const paymentOptions = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '🔘 TeleBirr', callback_data: 'payment_telebirr' },
-                    { text: '⚪ CBE Birr', callback_data: 'payment_cbe' }
-                ]
-            ]
-        }
-    };
-
-    await bot.sendMessage(chatId, paymentMessage, { parse_mode: 'Markdown', ...paymentOptions });
-};
-
-
-            await bot.sendMessage(chatId,
-                `🎯 *REGISTRATION STEP 4/6*\n\n` +
-                `💰 *Registration fee:* ${REGISTRATION_FEE} ETB\n\n` +
-                `Choose payment method:`,
-                { parse_mode: 'Markdown', ...options }
-            );
-        } else {
-            await bot.sendMessage(chatId,
-                `❌ *Invalid phone number format*\n\n` +
-                `Please enter a valid phone number with country code (e.g., +251912345678)`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-    }
-};
-
-const handlePaymentMethodSelection = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
-    const user = await getUser(userId);
-
-    if (text === '📱 TeleBirr' || text === '🏦 CBE Birr') {
-        const paymentMethod = text.includes('Tele') ? 'TeleBirr' : 'CBE Birr';
-        
-        user.paymentMethod = paymentMethod;
-        user.registrationStep = 'waiting_screenshot';
-        await setUser(userId, user);
-
-        await bot.sendMessage(chatId,
-            `🎯 *REGISTRATION STEP 5/6*\n\n` +
-            `Send your payment screenshot for verification:\n\n` +
-            `💰 Amount: ${REGISTRATION_FEE} ETB\n` +
-            `💳 Method: ${paymentMethod}`,
-            { parse_mode: 'Markdown' }
-        );
-    } else if (text === '❌ Cancel Registration') {
-        user.registrationStep = 'not_started';
-        user.paymentStatus = 'not_started';
-        await setUser(userId, user);
-        
-        await bot.sendMessage(chatId,
-            `❌ *Registration cancelled.*\n\n` +
-            `You can start again anytime.`,
-            { parse_mode: 'Markdown' }
-        );
-        await showMainMenu(chatId);
-    }
-};
-
-const handlePaymentScreenshot = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const user = await getUser(userId);
-
-    if (user.registrationStep === 'waiting_screenshot') {
-        let file_id = null;
-        
-        if (msg.photo) {
-            file_id = msg.photo[msg.photo.length - 1].file_id;
-        } else if (msg.document) {
-            file_id = msg.document.file_id;
-        }
-
-        if (file_id) {
-            await addPayment({
-                userId: userId,
-                file_id: file_id,
-                paymentMethod: user.paymentMethod,
-                status: 'pending'
-            });
-
-            user.paymentStatus = 'pending';
-            user.registrationStep = 'completed';
-            await setUser(userId, user);
-
-            await bot.sendMessage(chatId,
-                `✅ *Payment received!*\n\n` +
-                `🎯 *Registration pending admin approval*\n\n` +
-                `💰 Fee: ${REGISTRATION_FEE} ETB\n` +
-                `💳 Method: ${user.paymentMethod}\n` +
-                `📱 Status: ⏳ Pending Approval`,
-                { parse_mode: 'Markdown' }
-            );
-
-            await notifyAdminsNewPayment(user, file_id);
-            await showMainMenu(chatId);
-        } else {
-            await bot.sendMessage(chatId,
-                `❌ *Please send a valid image or document.*\n\n` +
-                `Send a clear screenshot of your payment.`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-    }
-};
-
-const notifyAdminsNewPayment = async (user, file_id) => {
-    const notificationMessage = 
-        `🔔 *NEW PAYMENT RECEIVED*\n\n` +
-        `👤 *User Information:*\n` +
-        `• Name: ${user.name}\n` +
-        `• Phone: ${user.phone}\n` +
-        `• Student Type: ${user.studentType}\n` +
-        `• User ID: ${user.telegramId}\n\n` +
-        `💳 *Payment Details:*\n` +
-        `• Method: ${user.paymentMethod}\n` +
-        `• Amount: ${REGISTRATION_FEE} ETB\n` +
-        `• Status: Pending Approval\n` +
-        `• Submitted: ${new Date().toLocaleString()}\n\n` +
-        `⚡ *QUICK ACTIONS:*`;
-
-    const options = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '✅ Approve', callback_data: `admin_approve_${user.telegramId}` },
-                    { text: '❌ Reject', callback_data: `admin_reject_${user.telegramId}` }
-                ],
-                [
-                    { text: '🔍 View Details', callback_data: `admin_details_${user.telegramId}` }
-                ]
-            ]
-        }
-    };
-
-    for (const adminId of ADMIN_IDS) {
-        try {
-            await bot.sendPhoto(adminId, file_id, {
-                caption: notificationMessage,
-                parse_mode: 'Markdown',
-                ...options
-            });
-        } catch (error) {
-            console.error(`Failed to notify admin ${adminId}:`, error);
-        }
-    }
-};
-
 const handleMyProfile = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -544,7 +526,6 @@ const handleMyProfile = async (msg) => {
         reply_markup: {
             keyboard: [
                 [{ text: '💰 Withdraw Rewards' }, { text: '💳 Change Payment Method' }],
-                [{ text: '📝 Set Username' }, { text: '📝 Set Bio' }],
                 [{ text: '📊 My Referrals' }, { text: '🔙 Back to Menu' }]
             ],
             resize_keyboard: true
@@ -596,6 +577,7 @@ const handleLeaderboard = async (msg) => {
 
     await bot.sendMessage(chatId, leaderboardText, { parse_mode: 'Markdown' });
 };
+
 const handleHelp = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -604,12 +586,10 @@ const handleHelp = async (msg) => {
     let helpMessage = 
         `❓ *HELP & SUPPORT*\n\n` +
         `📚 *Registration Process:*\n` +
-        `1. Click 'Register for Tutorial'\n` +
-        `2. Choose your student type\n` +
-        `3. Enter your details\n` +
-        `4. Select payment method\n` +
-        `5. Upload payment screenshot\n` +
-        `6. Wait for admin approval\n\n` +
+        `1. Fill the registration form\n` +
+        `2. Select payment method\n` +
+        `3. Upload payment screenshot\n` +
+        `4. Wait for admin approval\n\n` +
         `🎁 *Referral System:*\n` +
         `• Share your referral link\n` +
         `• Earn rewards for each successful referral\n` +
@@ -660,8 +640,8 @@ const handlePayFee = async (msg) => {
         `💰 *PAYMENT INFORMATION*\n\n` +
         `Registration Fee: ${REGISTRATION_FEE} ETB\n\n` +
         `📱 *Payment Methods:*\n` +
-        `• TeleBirr: [Your TeleBirr number]\n` +
-        `• CBE Birr: [Your CBE Birr number]\n\n` +
+        `• TeleBirr: +251 91 234 5678\n` +
+        `• CBE Birr: 1000 2345 6789\n\n` +
         `📋 *Payment Instructions:*\n` +
         `1. Send ${REGISTRATION_FEE} ETB to our account\n` +
         `2. Take a screenshot of the transaction\n` +
@@ -690,14 +670,71 @@ const handleUploadScreenshot = async (msg) => {
         return;
     }
 
+    // NEW: Check if user has selected payment method
+    if (!user.paymentMethod) {
+        await bot.sendMessage(chatId,
+            `❌ *Please complete registration first*\n\n` +
+            `You need to select a payment method before uploading screenshot.`,
+            { parse_mode: 'Markdown' }
+        );
+        return;
+    }
+
     await bot.sendMessage(chatId,
         `📤 *UPLOAD PAYMENT SCREENSHOT*\n\n` +
         `Send your payment screenshot for verification:\n\n` +
         `💰 Fee: ${REGISTRATION_FEE} ETB\n` +
-        `💳 Method: ${user.paymentMethod || 'Not selected'}\n\n` +
-        `Note: Complete registration first if not started.`,
+        `💳 Method: ${user.paymentMethod}`,
         { parse_mode: 'Markdown' }
     );
+};
+
+const handlePaymentScreenshot = async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const user = await getUser(userId);
+
+    // NEW: Check multiple registration states
+    if (user.registrationStep === 'filling_single_form' || user.paymentStatus === 'pending') {
+        let file_id = null;
+        
+        if (msg.photo) {
+            file_id = msg.photo[msg.photo.length - 1].file_id;
+        } else if (msg.document) {
+            file_id = msg.document.file_id;
+        }
+
+        if (file_id) {
+            await addPayment({
+                userId: userId,
+                file_id: file_id,
+                paymentMethod: user.paymentMethod,
+                status: 'pending'
+            });
+
+            user.paymentStatus = 'pending';
+            user.registrationStep = 'completed';
+            await setUser(userId, user);
+
+            await bot.sendMessage(chatId,
+                `✅ *Payment received!*\n\n` +
+                `🎯 *Registration pending admin approval*\n\n` +
+                `💰 Fee: ${REGISTRATION_FEE} ETB\n` +
+                `💳 Method: ${user.paymentMethod}\n` +
+                `📱 Status: ⏳ Pending Approval`,
+                { parse_mode: 'Markdown' }
+            );
+
+            await notifyAdminsNewPayment(user, file_id);
+            await showMainMenu(chatId);
+        } else {
+            await bot.sendMessage(chatId,
+                `❌ *Please send a valid image or document.*\n\n` +
+                `Send a clear screenshot of your payment.`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+    }
 };
 
 const handleWithdrawRewards = async (msg) => {
@@ -845,6 +882,7 @@ const handleSetAccountName = async (msg) => {
     await showMainMenu(chatId);
 };
 
+// ========== ADMIN FUNCTIONS ========== //
 const handleAdminPanel = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -880,176 +918,132 @@ const handleAdminPanel = async (msg) => {
         `• Pending Payments: ${pendingPayments.length}\n` +
         `• Pending Withdrawals: ${pendingWithdrawals.length}\n` +
         `• Total Referrals: ${Object.values(allUsers).reduce((sum, u) => sum + (u.referralCount || 0), 0)}\n\n` +
-        `Choose an admin function:` +
-        `\n\n${'='.repeat(30)}\n` +
-        `🎯 *SUPER ADMIN FEATURES*\n` +
-        `• Edit all messages and buttons\n` +
-        `• Change registration fees\n` +
-        `• Edit user data\n` +
-        `• Export data by date range\n` +
-        `• Full bot control`;
+        `Choose an admin function:`;
 
     await bot.sendMessage(chatId, adminMessage, { parse_mode: 'Markdown', ...options });
 };
 
-const handleAdminManageStudents = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    const allUsers = await getAllUsers();
-    const usersArray = Object.entries(allUsers).slice(0, 10);
-
-    if (usersArray.length === 0) {
-        await bot.sendMessage(chatId, '📊 No students found.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    let message = `👥 *MANAGE STUDENTS*\n\n`;
-    for (const [id, user] of usersArray) {
-        message += `• ${user.firstName} (${user.phone || 'No phone'}) - ${user.studentType || 'Not set'} - ${user.isVerified ? '✅' : '⏳'}\n`;
-    }
+const notifyAdminsNewPayment = async (user, file_id) => {
+    const notificationMessage = 
+        `🔔 *NEW PAYMENT RECEIVED*\n\n` +
+        `👤 *User Information:*\n` +
+        `• Name: ${user.name}\n` +
+        `• Phone: ${user.phone}\n` +
+        `• Student Type: ${user.studentType}\n` +
+        `• User ID: ${user.telegramId}\n\n` +
+        `💳 *Payment Details:*\n` +
+        `• Method: ${user.paymentMethod}\n` +
+        `• Amount: ${REGISTRATION_FEE} ETB\n` +
+        `• Status: Pending Approval\n` +
+        `• Submitted: ${new Date().toLocaleString()}\n\n` +
+        `⚡ *QUICK ACTIONS:*`;
 
     const options = {
         reply_markup: {
-            keyboard: [
-                [{ text: '🔍 View Details' }, { text: '✉️ Message' }],
-                [{ text: '❌ Block' }, { text: '✅ Approve Payment' }],
-                [{ text: '📊 Export Data' }, { text: '🔙 Back to Admin' }]
-            ],
-            resize_keyboard: true
+            inline_keyboard: [
+                [
+                    { text: '✅ Approve', callback_data: `admin_approve_${user.telegramId}` },
+                    { text: '❌ Reject', callback_data: `admin_reject_${user.telegramId}` }
+                ],
+                [
+                    { text: '🔍 View Details', callback_data: `admin_details_${user.telegramId}` }
+                ]
+            ]
         }
     };
 
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...options });
-};
-
-const handleAdminReviewPayments = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    const pendingPayments = await getPendingPayments();
-    
-    if (pendingPayments.length === 0) {
-        await bot.sendMessage(chatId, '💰 No pending payments.', { parse_mode: 'Markdown' });
-        return;
-    }
-
-    let message = `💰 *PENDING PAYMENTS (${pendingPayments.length})*\n\n`;
-    for (const payment of pendingPayments.slice(0, 5)) {
-        const user = await getUser(payment.userId);
-        message += `• ${user?.firstName || 'Unknown'} - ${payment.paymentMethod} - ${REGISTRATION_FEE} ETB\n`;
-    }
-
-    const options = {
-        reply_markup: {
-            keyboard: [
-                [{ text: '✅ Approve All' }, { text: '❌ Reject All' }],
-                [{ text: '🔍 View All' }, { text: '📊 Export Payments' }],
-                [{ text: '🔙 Back to Admin' }]
-            ],
-            resize_keyboard: true
+    for (const adminId of ADMIN_IDS) {
+        try {
+            await bot.sendPhoto(adminId, file_id, {
+                caption: notificationMessage,
+                parse_mode: 'Markdown',
+                ...options
+            });
+        } catch (error) {
+            console.error(`Failed to notify admin ${adminId}:`, error);
         }
-    };
-
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...options });
-};
-
-const handleAdminStats = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
     }
-
-    const allUsers = await getAllUsers();
-    const verifiedUsers = await getVerifiedUsers();
-    const pendingPayments = await getPendingPayments();
-    const pendingWithdrawals = await getPendingWithdrawals();
-    const totalReferrals = Object.values(allUsers).reduce((sum, u) => sum + (u.referralCount || 0), 0);
-    const totalRewards = Object.values(allUsers).reduce((sum, u) => sum + (u.totalRewards || 0), 0);
-
-    const statsMessage = 
-        `📊 *STUDENT STATISTICS*\n\n` +
-        `👥 Total Users: ${Object.keys(allUsers).length}\n` +
-        `✅ Verified Users: ${verifiedUsers.length}\n` +
-        `⏳ Pending Approvals: ${pendingPayments.length}\n` +
-        `💳 Pending Withdrawals: ${pendingWithdrawals.length}\n` +
-        `💰 Total Referrals: ${totalReferrals}\n` +
-        `🎁 Total Rewards: ${totalRewards} ETB\n` +
-        `📅 Active Since: ${Object.values(allUsers)[0]?.joinedAt ? getFirebaseTimestamp(Object.values(allUsers)[0].joinedAt).toLocaleDateString() : 'N/A'}`;
-
-    const options = {
-        reply_markup: {
-            keyboard: [
-                [{ text: '📈 Daily Trends' }, { text: '📈 Weekly Trends' }],
-                [{ text: '📈 Monthly Trends' }, { text: '📊 Export Stats' }],
-                [{ text: '🔙 Back to Admin' }]
-            ],
-            resize_keyboard: true
-        }
-    };
-
-    await bot.sendMessage(chatId, statsMessage, { parse_mode: 'Markdown', ...options });
 };
+// ========== CALLBACK QUERY HANDLER ========== //
+const handleCallbackQuery = async (callbackQuery) => {
+    const message = callbackQuery.message;
+    const userId = callbackQuery.from.id;
+    const data = callbackQuery.data;
+    const chatId = message.chat.id;
 
-const handleAdminBotSettings = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
+    try {
+        // Admin callbacks
+        if (data.startsWith('admin_approve_')) {
+            const targetUserId = parseInt(data.replace('admin_approve_', ''));
+            await handleAdminApprove(targetUserId, userId);
+        }
+        else if (data.startsWith('admin_reject_')) {
+            const targetUserId = parseInt(data.replace('admin_reject_', ''));
+            await handleAdminReject(targetUserId, userId);
+        }
+        else if (data.startsWith('admin_details_')) {
+            const targetUserId = parseInt(data.replace('admin_details_', ''));
+            await handleAdminDetails(targetUserId, userId);
+        }
+        // NEW: Registration form callbacks
+        else if (data === 'select_social') {
+            const user = await getUser(userId);
+            user.studentType = 'Social Science';
+            await setUser(userId, user);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Social Science selected' });
+            await showPaymentMethods(chatId, userId);
+        }
+        else if (data === 'select_natural') {
+            const user = await getUser(userId);
+            user.studentType = 'Natural Science';
+            await setUser(userId, user);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Natural Science selected' });
+            await showPaymentMethods(chatId, userId);
+        }
+        else if (data === 'payment_telebirr') {
+            const user = await getUser(userId);
+            user.paymentMethod = 'TeleBirr';
+            await setUser(userId, user);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ TeleBirr selected' });
+            await showAccountDetails(chatId, 'TeleBirr');
+        }
+        else if (data === 'payment_cbe') {
+            const user = await getUser(userId);
+            user.paymentMethod = 'CBE Birr';
+            await setUser(userId, user);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ CBE Birr selected' });
+            await showAccountDetails(chatId, 'CBE Birr');
+        }
 
-    if (!ADMIN_IDS.includes(userId)) {
-        await bot.sendMessage(chatId, '❌ You are not authorized.', { parse_mode: 'Markdown' });
-        return;
+        await bot.answerCallbackQuery(callbackQuery.id);
+    } catch (error) {
+        console.error('Callback error:', error);
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Error processing request' });
     }
-
-    const settingsMessage = 
-        `⚙️ *BOT SETTINGS*\n\n` +
-        `💰 Registration Fee: ${REGISTRATION_FEE} ETB\n` +
-        `🎁 Referral Reward: ${REFERRAL_REWARD} ETB\n` +
-        `👥 Min Referrals: ${MIN_REFERRALS_FOR_WITHDRAW}\n\n` +
-        `🎯 *FEATURES TO EDIT:*\n` +
-        `• All bot messages\n` +
-        `• All button texts\n` +
-        `• Add new buttons\n` +
-        `• Delete buttons\n` +
-        `• Change fees\n` +
-        `• Manage admin access`;
-
-    const options = {
-        reply_markup: {
-            keyboard: [
-                [{ text: '✏️ Edit Messages' }, { text: '✏️ Edit Buttons' }],
-                [{ text: '➕ Add Button' }, { text: '🗑️ Delete Button' }],
-                [{ text: '💰 Edit Fees' }, { text: '👥 Edit Admins' }],
-                [{ text: '💳 Toggle Withdrawal' }, { text: '🔙 Back to Admin' }]
-            ],
-            resize_keyboard: true
-        }
-    };
-
-    await bot.sendMessage(chatId, settingsMessage, { parse_mode: 'Markdown', ...options });
 };
 
-// ========== COMPLETE MESSAGE HANDLER ========== //
+// ========== MESSAGE HANDLER ========== //
 const handleMessage = async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     const text = msg.text;
 
-    if (!text) return;
+    if (!text && !msg.contact && !msg.photo && !msg.document) return;
 
     try {
+        // Handle contact sharing
+        if (msg.contact) {
+            await handleContactShared(msg);
+            return;
+        }
+
+        // Handle photo/document (payment screenshot)
+        if (msg.photo || msg.document) {
+            await handlePaymentScreenshot(msg);
+            return;
+        }
+
+        // Handle commands
         if (text.startsWith('/')) {
             switch (text) {
                 case '/start':
@@ -1074,6 +1068,7 @@ const handleMessage = async (msg) => {
                     await showMainMenu(chatId);
             }
         } else {
+            // Handle button clicks and form interactions
             switch (text) {
                 case '📚 Register for Tutorial':
                     await handleRegisterTutorial(msg);
@@ -1113,235 +1108,29 @@ const handleMessage = async (msg) => {
                     });
                     await bot.sendMessage(chatId, referralText, { parse_mode: 'Markdown' });
                     break;
-                case '📝 Set Username':
-                case '📝 Set Bio':
-                    await bot.sendMessage(chatId, `Coming soon: ${text}`, { parse_mode: 'Markdown' });
+                case '✅ SUBMIT REGISTRATION':
+                    await handleFormSubmission(msg);
                     break;
-                case '📱 TeleBirr':
-                case '🏦 CBE Birr':
-                    await handleSetPaymentMethod(msg);
+                case '🔄 START OVER':
+                    await handleStartOver(msg);
                     break;
-                case '👥 Manage Students':
-                    await handleAdminManageStudents(msg);
+                case '📎 Upload Payment Screenshot':
+                    await handleUploadScreenshot(msg);
                     break;
-                case '💰 Review Payments':
-                    await handleAdminReviewPayments(msg);
-                    break;
-                case '📊 Student Stats':
-                    await handleAdminStats(msg);
-                    break;
-                case '❌ Block Student':
-                    await bot.sendMessage(chatId, 'Coming soon: Block Student feature', { parse_mode: 'Markdown' });
-                    break;
-                case '📈 Registration Trends':
-                    await bot.sendMessage(chatId, 'Coming soon: Registration Trends', { parse_mode: 'Markdown' });
-                    break;
-                case '👤 Add Admin':
-                    await bot.sendMessage(chatId, 'Coming soon: Add Admin', { parse_mode: 'Markdown' });
-                    break;
-                case '🔧 Maintenance Mode':
-                    await bot.sendMessage(chatId, 'Coming soon: Maintenance Mode', { parse_mode: 'Markdown' });
-                    break;
-                case '✉️ Message Student':
-                    await bot.sendMessage(chatId, 'Coming soon: Message Student', { parse_mode: 'Markdown' });
-                    break;
-                case '📢 Broadcast Message':
-                    await bot.sendMessage(chatId, 'Coming soon: Broadcast Message', { parse_mode: 'Markdown' });
-                    break;
-                case '⚙️ Bot Settings':
-                    await handleAdminBotSettings(msg);
-                    break;
-                case '✏️ Edit Messages':
-                    await bot.sendMessage(chatId, 'Coming soon: Edit Messages', { parse_mode: 'Markdown' });
-                    break;
-                case '✏️ Edit Buttons':
-                    await bot.sendMessage(chatId, 'Coming soon: Edit Buttons', { parse_mode: 'Markdown' });
-                    break;
-                case '💰 Edit Fees':
-                    await bot.sendMessage(chatId, 'Coming soon: Edit Fees', { parse_mode: 'Markdown' });
-                    break;
-                case '👥 Edit Admins':
-                    await bot.sendMessage(chatId, 'Coming soon: Edit Admins', { parse_mode: 'Markdown' });
-                    break;
-                case '💳 Toggle Withdrawal':
-                    await bot.sendMessage(chatId, 'Coming soon: Toggle Withdrawal', { parse_mode: 'Markdown' });
-                    break;
-                case '📊 Export Data':
-                    await bot.sendMessage(chatId, 'Coming soon: Export Data', { parse_mode: 'Markdown' });
-                    break;
-                case '🔍 View Details':
-                case '✉️ Message':
-                case '✅ Approve Payment':
-                case '🔍 View All':
-                case '✅ Approve All':
-                case '❌ Reject All':
-                case '📈 Daily Trends':
-                case '📈 Weekly Trends':
-                case '📈 Monthly Trends':
-                case '📊 Export Stats':
-                case '➕ Add Button':
-                case '🗑️ Delete Button':
-                case '📊 Export Users':
-                case '💰 Export Payments':
-                case '👥 Export Referrals':
-                case '📅 Export by Date':
-                case '🔙 Back to Admin':
-                    await handleAdminPanel(msg);
-                    break;
-                case '📚 Social Science':
-                case '🔬 Natural Science':
-                    await handleStudentTypeSelection(msg);
-                    break;
-                case '❌ Cancel Registration':
-                    const cancelUser = await getUser(userId);
-                    cancelUser.registrationStep = 'not_started';
-                    cancelUser.paymentStatus = 'not_started';
-                    await setUser(userId, cancelUser);
-                    
-                    await bot.sendMessage(chatId,
-                        `❌ *Registration cancelled.*\n\n` +
-                        `You can start again anytime.`,
-                        { parse_mode: 'Markdown' }
-                    );
-                    await showMainMenu(chatId);
+                case '🔙 Change Payment Method':
+                    await handleRegisterTutorial(msg);
                     break;
                 case '🔙 Back to Menu':
                     await showMainMenu(chatId);
                     break;
                 default:
-                    // Handle registration flow
-                    const user = await getUser(userId);
-                    if (user.registrationStep === 'waiting_name') {
-                        await handleNameInput(msg);
-                    } else if (user.registrationStep === 'waiting_phone') {
-                        await handlePhoneInput(msg);
-                    } else if (user.paymentMethodPreference && !user.accountNumber) {
-                        await handleSetAccountNumber(msg);
-                    } else if (user.accountNumber && !user.accountName) {
-                        await handleSetAccountName(msg);
-                    } else {
-                        await showMainMenu(chatId);
-                    }
+                    // Handle name input and other text
+                    await handleNameInput(msg);
             }
         }
     } catch (error) {
         console.error('Error handling message:', error);
         await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
-    }
-};
-
-// ========== PHOTO HANDLER ========== //
-const handlePhoto = async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const user = await getUser(userId);
-
-    if (user.registrationStep === 'waiting_screenshot') {
-        await handlePaymentScreenshot(msg);
-    } else {
-        await bot.sendMessage(chatId,
-            `📸 *Photo received*\n\n` +
-            `Use the main menu to continue.`,
-            { parse_mode: 'Markdown' }
-        );
-        await showMainMenu(chatId);
-    }
-};
-
-// ========== CALLBACK QUERY HANDLER ========== //
-const handleCallbackQuery = async (callbackQuery) => {
-    const message = callbackQuery.message;
-    const userId = callbackQuery.from.id;
-    const data = callbackQuery.data;
-    const chatId = message.chat.id;
-
-    try {
-        if (data.startsWith('admin_approve_')) {
-            const targetUserId = parseInt(data.replace('admin_approve_', ''));
-            await handleAdminApprove(targetUserId, userId);
-        } else if (data.startsWith('admin_reject_')) {
-            const targetUserId = parseInt(data.replace('admin_reject_', ''));
-            await handleAdminReject(targetUserId, userId);
-        } else if (data.startsWith('admin_details_')) {
-            const targetUserId = parseInt(data.replace('admin_details_', ''));
-            await handleAdminDetails(targetUserId, userId);
-        }
-
-        await bot.answerCallbackQuery(callbackQuery.id);
-    } catch (error) {
-        console.error('Callback error:', error);
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Error processing request' });
-    }
-};
-
-// ========== ADMIN FUNCTIONS ========== //
-const handleAdminApprove = async (targetUserId, adminId) => {
-    const user = await getUser(targetUserId);
-    if (user) {
-        user.isVerified = true;
-        user.paymentStatus = 'approved';
-        await setUser(targetUserId, user);
-
-        try {
-            await bot.sendMessage(targetUserId,
-                `🎉 *REGISTRATION APPROVED!*\n\n` +
-                `✅ Your registration has been approved!\n\n` +
-                `📚 You can now access tutorials.\n` +
-                `💰 Registration fee: ${REGISTRATION_FEE} ETB`,
-                { parse_mode: 'Markdown' }
-            );
-        } catch (error) {
-            console.error('Failed to send approval message:', error);
-        }
-
-        await bot.sendMessage(adminId,
-            `✅ *Payment approved for user ${targetUserId}*`,
-            { parse_mode: 'Markdown' }
-        );
-    }
-};
-
-const handleAdminReject = async (targetUserId, adminId) => {
-    const user = await getUser(targetUserId);
-    if (user) {
-        user.isVerified = false;
-        user.paymentStatus = 'rejected';
-        await setUser(targetUserId, user);
-
-        try {
-            await bot.sendMessage(targetUserId,
-                `❌ *PAYMENT REJECTED*\n\n` +
-                `Your payment has been rejected.\n\n` +
-                `Please contact admin for more information.`,
-                { parse_mode: 'Markdown' }
-            );
-        } catch (error) {
-            console.error('Failed to send rejection message:', error);
-        }
-
-        await bot.sendMessage(adminId,
-            `❌ *Payment rejected for user ${targetUserId}*`,
-            { parse_mode: 'Markdown' }
-        );
-    }
-};
-
-const handleAdminDetails = async (targetUserId, adminId) => {
-    const user = await getUser(targetUserId);
-    if (user) {
-        const detailsMessage = 
-            `🔍 *USER DETAILS*\n\n` +
-            `👤 Name: ${user.name}\n` +
-            `📱 Phone: ${user.phone}\n` +
-            `🎓 Type: ${user.studentType}\n` +
-            `✅ Verified: ${user.isVerified ? 'Yes' : 'No'}\n` +
-            `👥 Referrals: ${user.referralCount || 0}\n` +
-            `💰 Rewards: ${user.rewards || 0} ETB\n` +
-            `📊 Joined: ${user.joinedAt ? getFirebaseTimestamp(user.joinedAt).toLocaleDateString() : 'N/A'}\n` +
-            `💳 Account: ${user.accountNumber || 'Not set'}\n` +
-            `🆔 User ID: ${user.telegramId}`;
-
-        await bot.sendMessage(adminId, detailsMessage, { parse_mode: 'Markdown' });
     }
 };
 
@@ -1388,8 +1177,6 @@ module.exports = async (req, res) => {
                 await handleMessage(update.message);
             } else if (update.callback_query) {
                 await handleCallbackQuery(update.callback_query);
-            } else if (update.message && update.message.photo) {
-                await handlePhoto(update.message);
             }
 
             return res.status(200).json({ ok: true });
@@ -1402,5 +1189,4 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: 'Method not allowed' });
 };
 
-console.log('✅ Complete Tutorial Registration Bot configured for Vercel!');
-
+console.log('✅ Complete Tutorial Registration Bot with NEW form configured for Vercel!');

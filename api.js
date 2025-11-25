@@ -53,6 +53,14 @@ if (!BOT_TOKEN) {
 // Create bot instance (webhook mode for Vercel)
 const bot = new TelegramBot(BOT_TOKEN);
 
+// ========== HELPER FUNCTIONS ========== //
+const getFirebaseTimestamp = (timestamp) => {
+    if (!timestamp) return null;
+    if (timestamp.toDate) return timestamp.toDate();
+    if (timestamp.seconds) return new Date(timestamp.seconds * 1000);
+    return new Date(timestamp);
+};
+
 // ========== DATABASE FUNCTIONS ========== //
 const getUser = async (userId) => {
     try {
@@ -523,7 +531,7 @@ const notifyAdminsNewPayment = async (user, file_id) => {
                     { text: '❌ Reject', callback_data: `admin_reject_${user.telegramId}` }
                 ],
                 [
-                    { text: '🔍 View Details', callback_data: `admin_details_${user.telegramId}` }
+                    { text: '🔍 View Details', callback_ `admin_details_${user.telegramId}` }
                 ]
             ]
         }
@@ -558,7 +566,7 @@ const handleMyProfile = async (msg) => {
         `✅ Status: ${user.isVerified ? '✅ Verified' : '⏳ Pending Approval'}\n` +
         `👥 Referrals: ${user.referralCount || 0}\n` +
         `💰 Rewards: ${(user.rewards || 0)} ETB\n` +
-        `📊 Registration: ${user.joinedAt ? new Date(user.joinedAt.seconds * 1000).toLocaleDateString() : 'Not set'}\n` +
+        `📊 Registration: ${user.joinedAt ? getFirebaseTimestamp(user.joinedAt).toLocaleDateString() : 'Not set'}\n` +
         `💳 Account: ${user.accountNumber || 'Not set'}\n` +
         `👤 Account Name: ${user.accountName || 'Not set'}\n\n` +
         `Can Withdraw: ${canWithdraw ? '✅ Yes' : '❌ No'}\n` +
@@ -1013,7 +1021,7 @@ const handleAdminStats = async (msg) => {
         `💳 Pending Withdrawals: ${pendingWithdrawals.length}\n` +
         `💰 Total Referrals: ${totalReferrals}\n` +
         `🎁 Total Rewards: ${totalRewards} ETB\n` +
-        `📅 Active Since: ${Object.values(allUsers)[0]?.joinedAt ? new Date(Object.values(allUsers)[0].joinedAt.seconds * 1000).toLocaleDateString() : 'N/A'}`;
+        `📅 Active Since: ${Object.values(allUsers)[0]?.joinedAt ? getFirebaseTimestamp(Object.values(allUsers)[0].joinedAt).toLocaleDateString() : 'N/A'}`;
 
     const options = {
         reply_markup: {
@@ -1064,6 +1072,26 @@ const handleAdminBotSettings = async (msg) => {
     };
 
     await bot.sendMessage(chatId, settingsMessage, { parse_mode: 'Markdown', ...options });
+};
+
+// ========== ADD THE MISSING FUNCTION ========== //
+const handleAdminDetails = async (targetUserId, adminId) => {
+    const user = await getUser(targetUserId);
+    if (user) {
+        const detailsMessage = 
+            `🔍 *USER DETAILS*\n\n` +
+            `👤 Name: ${user.name}\n` +
+            `📱 Phone: ${user.phone}\n` +
+            `🎓 Type: ${user.studentType}\n` +
+            `✅ Verified: ${user.isVerified ? 'Yes' : 'No'}\n` +
+            `👥 Referrals: ${user.referralCount || 0}\n` +
+            `💰 Rewards: ${user.rewards || 0} ETB\n` +
+            `📊 Joined: ${user.joinedAt ? getFirebaseTimestamp(user.joinedAt).toLocaleDateString() : 'N/A'}\n` +
+            `💳 Account: ${user.accountNumber || 'Not set'}\n` +
+            `🆔 User ID: ${user.telegramId}`;
+
+        await bot.sendMessage(adminId, detailsMessage, { parse_mode: 'Markdown' });
+    }
 };
 
 // ========== COMPLETE MESSAGE HANDLER ========== //
@@ -1218,10 +1246,11 @@ const handleMessage = async (msg) => {
                     await handleStudentTypeSelection(msg);
                     break;
                 case '❌ Cancel Registration':
-                    const user = await getUser(userId);
-                    user.registrationStep = 'not_started';
-                    user.paymentStatus = 'not_started';
-                    await setUser(userId, user);
+                    // ✅ FIXED: Use different variable name to avoid conflict
+                    const cancelUser = await getUser(userId);
+                    cancelUser.registrationStep = 'not_started';
+                    cancelUser.paymentStatus = 'not_started';
+                    await setUser(userId, cancelUser);
                     
                     await bot.sendMessage(chatId,
                         `❌ *Registration cancelled.*\n\n` +
@@ -1289,7 +1318,7 @@ const handleCallbackQuery = async (callbackQuery) => {
             await handleAdminReject(targetUserId, userId);
         } else if (data.startsWith('admin_details_')) {
             const targetUserId = parseInt(data.replace('admin_details_', ''));
-            await handleAdminDetails(targetUserId, userId);
+            await handleAdminDetails(targetUserId, userId); // ✅ FIXED: This function now exists
         }
 
         await bot.answerCallbackQuery(callbackQuery.id);
@@ -1348,25 +1377,6 @@ const handleAdminReject = async (targetUserId, adminId) => {
             `❌ *Payment rejected for user ${targetUserId}*`,
             { parse_mode: 'Markdown' }
         );
-    }
-};
-
-const handleAdminDetails = async (targetUserId, adminId) => {
-    const user = await getUser(targetUserId);
-    if (user) {
-        const detailsMessage = 
-            `🔍 *USER DETAILS*\n\n` +
-            `👤 Name: ${user.name}\n` +
-            `📱 Phone: ${user.phone}\n` +
-            `🎓 Type: ${user.studentType}\n` +
-            `✅ Verified: ${user.isVerified ? 'Yes' : 'No'}\n` +
-            `👥 Referrals: ${user.referralCount || 0}\n` +
-            `💰 Rewards: ${user.rewards || 0} ETB\n` +
-            `📊 Joined: ${user.joinedAt ? new Date(user.joinedAt.seconds * 1000).toLocaleDateString() : 'N/A'}\n` +
-            `💳 Account: ${user.accountNumber || 'Not set'}\n` +
-            `🆔 User ID: ${user.telegramId}`;
-
-        await bot.sendMessage(adminId, detailsMessage, { parse_mode: 'Markdown' });
     }
 };
 
